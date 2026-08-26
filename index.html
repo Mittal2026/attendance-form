@@ -113,39 +113,114 @@ let isSubmitting = false;
 let modalConfirmCallback = null;
 
 /* ============================================================
-   API HELPERS
+   API HELPERS (WITH TIMEOUT & RETRY)
    ============================================================ */
+const MAX_RETRIES = 3;
+const RETRY_DELAY_MS = 2000;
+const REQUEST_TIMEOUT_MS = 15000;
+
+function fetchWithTimeout(url, options, timeoutMs) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(function () { controller.abort(); }, timeoutMs);
+  options = options || {};
+  options.signal = controller.signal;
+  return fetch(url, options).finally(function () { clearTimeout(timeoutId); });
+}
+
+function sleep(ms) {
+  return new Promise(function (resolve) { setTimeout(resolve, ms); });
+}
+
 function apiGet(params) {
   const queryString = Object.keys(params)
-    .map(function (k) {
-      return encodeURIComponent(k) + '=' + encodeURIComponent(params[k]);
-    })
+    .map(function (k) { return encodeURIComponent(k) + '=' + encodeURIComponent(params[k]); })
     .join('&');
-  return fetch(API_URL + '?' + queryString).then(function (res) {
-    if (!res.ok) throw new Error('Network error: ' + res.status);
-    return res.json();
-  });
+  const url = API_URL + '?' + queryString;
+  let attempt = 0;
+
+  function tryRequest() {
+    attempt++;
+    return fetchWithTimeout(url, {}, REQUEST_TIMEOUT_MS)
+      .then(function (res) {
+        if (!res.ok) throw new Error('Server error: ' + res.status);
+        return res.json();
+      })
+      .catch(function (err) {
+        if (attempt < MAX_RETRIES) {
+          console.log('API GET attempt ' + attempt + ' failed (cold start?). Retrying in 2s...');
+          return sleep(RETRY_DELAY_MS).then(tryRequest);
+        }
+        throw new Error('Network error after ' + MAX_RETRIES + ' attempts. Please refresh the page.');
+      });
+  }
+  return tryRequest();
 }
 
 function apiPost(payload) {
-  return fetch(API_URL, {
+  // NO RETRY for POST to prevent duplicate attendance submissions
+  return fetchWithTimeout(API_URL, {
     method: 'POST',
     body: JSON.stringify(payload)
-  }).then(function (res) {
+  }, REQUEST_TIMEOUT_MS).then(function (res) {
     if (!res.ok) throw new Error('Network error: ' + res.status);
     return res.json();
   });
 }
 
 /* ============================================================
-   INITIALIZATION
+   CACHING & INITIALIZATION
    ============================================================ */
+const CACHE_KEY = 'attendanceFormData_v1';
+const CACHE_EXPIRY_MS = 30 * 60 * 1000; // 30 mins
+
+function getCachedFormData() {
+  try {
+    const cached = sessionStorage.getItem(CACHE_KEY);
+    if (!cached) return null;
+    const parsed = JSON.parse(cached);
+    if (Date.now() - parsed.timestamp > CACHE_EXPIRY_MS) {
+      sessionStorage.removeItem(CACHE_KEY);
+      return null;
+    }
+    return parsed.data;
+  } catch (e) { return null; }
+}
+
+function setCachedFormData(data) {
+  try {
+    sessionStorage.setItem(CACHE_KEY, JSON.stringify({ data: data, timestamp: Date.now() }));
+  } catch (e) {}
+}
+
+function loadFormData() {
+  const cached = getCachedFormData();
+  if (cached && cached.businessUnits && cached.businessUnits.length > 0) {
+    initializeForm(cached); // Load instantly from cache
+    // Silently refresh in background
+    apiGet({ action: 'formData' })
+      .then(function (freshData) {
+        setCachedFormData(freshData);
+        if (freshData.businessUnits.length !== cached.businessUnits.length) {
+          initializeForm(freshData); // Re-render only if BU count changed
+        }
+      })
+      .catch(function () { /* Silent fail, cache is still valid */ });
+  } else {
+    showMessage('Loading form data...', 'info');
+    apiGet({ action: 'formData' })
+      .then(function (data) {
+        hideMessage();
+        setCachedFormData(data);
+        initializeForm(data);
+      })
+      .catch(showFatalError);
+  }
+}
+
 window.addEventListener('DOMContentLoaded', function () {
   setDefaultDate();
 
-  apiGet({ action: 'formData' })
-    .then(initializeForm)
-    .catch(showFatalError);
+  loadFormData(); // <--- CHANGED: Uses cache + retry logic instead of raw apiGet
 
   addListener('module', 'change', onModuleChange);
   addListener('loadBtn', 'click', handleDateOrBuChange);
@@ -687,7 +762,8 @@ function hideMessage() {
 }
 
 function showFatalError(error) {
-  showMessage(error.message || 'Unexpected error occurred.', 'error');
+  const msg = (error.message || 'Unexpected error occurred.') + ' Please refresh the page (F5) to try again.';
+  showMessage(msg, 'error');
   updateButtons(0);
 }
 
