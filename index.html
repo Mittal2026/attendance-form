@@ -41,6 +41,7 @@
       <div class="button-row">
         <button id="loadBtn" class="btn btn-secondary">Load Employees</button>
         <button id="markAllBtn" class="btn btn-secondary" disabled>Mark All Present</button>
+        <button id="markAllSiteBtn" class="btn btn-secondary" disabled>Mark All Site</button>
         <button id="markAllWoBtn" class="btn btn-secondary" disabled>Mark All WO</button>
         <button id="markAllPhBtn" class="btn btn-secondary" disabled>Mark All PH</button>
         <button id="markAllNhBtn" class="btn btn-secondary" disabled>Mark All NH</button>
@@ -227,6 +228,7 @@ window.addEventListener('DOMContentLoaded', function () {
   addListener('attendanceDate', 'change', handleDateOrBuChange);
   addListener('businessUnit', 'change', handleDateOrBuChange);
   addListener('markAllBtn', 'click', function () { setAllAttendance('P'); });
+  addListener('markAllSiteBtn', 'click', function () {setAllAttendance('S'); });
   addListener('markAllWoBtn', 'click', function () { setAllAttendance('WO'); });
   addListener('markAllPhBtn', 'click', function () { setAllAttendance('PH'); });
   addListener('markAllNhBtn', 'click', function () { setAllAttendance('NH'); });
@@ -725,6 +727,7 @@ function updateButtons(employeeCount) {
 
   const canEdit = !currentReadOnly && employeeCount > 0 && !isSubmitting;
   document.getElementById('markAllBtn').disabled = !canEdit;
+  document.getElementById('markAllSiteBtn').disabled = !canEdit;
   document.getElementById('markAllWoBtn').disabled = !canEdit;
   document.getElementById('markAllPhBtn').disabled = !canEdit;
   document.getElementById('markAllNhBtn').disabled = !canEdit;
