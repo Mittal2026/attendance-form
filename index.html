@@ -317,10 +317,16 @@ function renderGrid(data) {
   }
 
   currentReadOnly = !!data.alreadySubmitted;
+  var hasNewEmployees = !!data.hasNewEmployees;
 
   if (data.alreadySubmitted) {
     showMessage(
       data.message || 'Attendance has already been submitted for this Business Unit and date.',
+      'warning'
+    );
+  } else if (hasNewEmployees) {
+    showMessage(
+      data.message || 'New employee(s) detected. Existing attendance is read-only. Mark new employees and submit.',
       'warning'
     );
   }
@@ -360,7 +366,14 @@ function renderGrid(data) {
     select.dataset.employeeId = emp.employeeId;
     select.dataset.employeeName = emp.employeeName;
 
-    if (currentReadOnly) select.disabled = true;
+    /**
+     * Disable dropdown if:
+     * - Entire form is read-only (already submitted, no new employees)
+     * - OR this specific employee was already submitted (partial edit mode)
+     */
+    if (currentReadOnly || (!currentReadOnly && emp.isNew === false)) {
+      select.disabled = true;
+    }
 
     const blankOption = document.createElement('option');
     blankOption.value = '';
@@ -419,6 +432,9 @@ function submitForm() {
   const entries = [];
   const missing = [];
   document.querySelectorAll('.attendance-select').forEach(function (select) {
+    // Skip disabled (read-only) dropdowns — already submitted
+    if (select.disabled) return;
+
     const employeeId = select.dataset.employeeId;
     const employeeName = select.dataset.employeeName;
     const code = select.value;
@@ -438,8 +454,16 @@ function submitForm() {
     return;
   }
 
+  /**
+   * Determine submission mode.
+   * If there are disabled dropdowns on the page, this is a supplementary submission.
+   */
+  const hasDisabledDropdowns = document.querySelector('.attendance-select:disabled') !== null;
+  const submissionMode = hasDisabledDropdowns ? 'supplementary' : 'full';
+
   const payload = {
     action: 'submitAttendance',
+    mode: submissionMode,
     date: date,
     businessUnit: businessUnit,
     entries: entries
@@ -462,7 +486,18 @@ function onSubmitSuccess(result) {
   setSubmitting(false);
   if (result.success) {
     showMessage(result.message + ' Submission ID: ' + result.submissionId, 'success');
-    resetFormAfterSubmit();
+    /**
+     * After supplementary submission, reload the grid to show
+     * the updated state (all employees now submitted, form becomes read-only).
+     */
+    const hasDisabledDropdowns = document.querySelector('.attendance-select:disabled') !== null;
+    if (hasDisabledDropdowns) {
+      // Supplementary mode: reload grid to reflect new state
+      setTimeout(function () { loadGrid(); }, 1500);
+    } else {
+      // Full mode: reset form as before
+      resetFormAfterSubmit();
+    }
   } else {
     showMessage(result.message || 'Submission failed.', 'error');
   }
@@ -725,7 +760,12 @@ function updateButtons(employeeCount) {
     summary.textContent = employeeCount ? 'Employees to submit: ' + employeeCount : '';
   }
 
-  const canEdit = !currentReadOnly && employeeCount > 0 && !isSubmitting;
+  /**
+   * In partial edit mode, currentReadOnly is false but some dropdowns are disabled.
+   * canEdit should be true only if there are enabled (editable) dropdowns.
+   */
+  const editableCount = document.querySelectorAll('.attendance-select:not(:disabled)').length;
+  const canEdit = editableCount > 0 && !isSubmitting;
   document.getElementById('markAllBtn').disabled = !canEdit;
   document.getElementById('markAllSiteBtn').disabled = !canEdit;
   document.getElementById('markAllWoBtn').disabled = !canEdit;
