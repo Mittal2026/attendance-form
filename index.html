@@ -1,0 +1,810 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Attendance Submission</title>
+  <link rel="stylesheet" href="form-style.css">
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>Attendance Submission Engine</h1>
+      <p class="subtitle">Mark and submit daily attendance</p>
+    </div>
+
+    <div id="message" class="message"></div>
+
+    <div class="form-card">
+      <div class="form-row">
+        <label for="module">Select Module</label>
+        <select id="module">
+          <option value="submission">Attendance Submission</option>
+          <option value="correction">Attendance Correction</option>
+        </select>
+      </div>
+
+      <div class="form-row">
+        <label for="attendanceDate">Attendance Date</label>
+        <input type="date" id="attendanceDate">
+      </div>
+
+      <div class="form-row">
+        <label for="businessUnit">Business Unit</label>
+        <select id="businessUnit">
+          <option value="">Select Business Unit</option>
+        </select>
+      </div>
+    </div>
+
+    <div id="submissionSection" class="form-card">
+      <div class="button-row">
+        <button id="loadBtn" class="btn btn-secondary">Load Employees</button>
+        <button id="markAllBtn" class="btn btn-secondary" disabled>Mark All Present</button>
+        <button id="markAllSiteBtn" class="btn btn-secondary" disabled>Mark All Site</button>
+        <button id="markAllWoBtn" class="btn btn-secondary" disabled>Mark All WO</button>
+        <button id="markAllPhBtn" class="btn btn-secondary" disabled>Mark All PH</button>
+        <button id="markAllNhBtn" class="btn btn-secondary" disabled>Mark All NH</button>
+        <button id="clearAllBtn" class="btn btn-secondary" disabled>Clear All</button>
+      </div>
+      <div id="summary" class="summary"></div>
+      <div id="tableContainer"></div>
+      <div class="button-row">
+        <button id="submitBtn" class="btn btn-primary" disabled>Submit Attendance</button>
+      </div>
+    </div>
+
+    <div id="correctionSection" class="form-card" style="display:none;">
+      <div class="form-row">
+        <label for="correctionEmployee">Employee</label>
+        <select id="correctionEmployee">
+          <option value="">Select Employee</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <label for="currentAttendance">Current Attendance</label>
+        <input type="text" id="currentAttendance" readonly>
+      </div>
+      <div class="form-row">
+        <label for="correctedAttendance">Corrected Attendance</label>
+        <select id="correctedAttendance">
+          <option value="">Select corrected remark</option>
+        </select>
+      </div>
+      <div class="button-row">
+        <button id="submitCorrectionBtn" class="btn btn-primary" disabled>Submit Correction</button>
+      </div>
+    </div>
+
+    <div id="loading" class="loading">
+      <div class="loading-spinner"></div>
+      Processing...
+    </div>
+
+    <div class="footer">Attendance Submission Engine</div>
+  </div>
+
+  <div id="modalOverlay" class="modal-overlay">
+    <div class="modal-box">
+      <h3 id="modalTitle">Please Confirm</h3>
+      <div id="modalMessage"></div>
+      <div class="modal-buttons">
+        <button id="modalCancelBtn" class="btn btn-secondary">Cancel</button>
+        <button id="modalConfirmBtn" class="btn btn-primary">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+/* ============================================================
+   CONFIGURATION
+   ============================================================ */
+// Paste your Apps Script Web App URL here (the /exec URL)
+const API_URL = 'https://script.google.com/macros/s/AKfycbz-6vQi2b4ZITOW-zOMyPXNjp_o9vAvO2X_rZKVXOmKMJH6Djs4L8IzWyrU5cgOrzvqeA/exec';
+
+// If true, date resets to today after successful submission.
+const RESET_DATE_AFTER_SUBMIT = true;
+
+/* ============================================================
+   STATE
+   ============================================================ */
+let remarks = [];
+let currentReadOnly = false;
+let isSubmitting = false;
+let modalConfirmCallback = null;
+
+/* ============================================================
+   API HELPERS (WITH TIMEOUT & RETRY)
+   ============================================================ */
+const MAX_RETRIES = 3;
+const RETRY_DELAY_MS = 2000;
+const REQUEST_TIMEOUT_MS = 15000;
+
+function fetchWithTimeout(url, options, timeoutMs) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(function () { controller.abort(); }, timeoutMs);
+  options = options || {};
+  options.signal = controller.signal;
+  return fetch(url, options).finally(function () { clearTimeout(timeoutId); });
+}
+
+function sleep(ms) {
+  return new Promise(function (resolve) { setTimeout(resolve, ms); });
+}
+
+function apiGet(params) {
+  const queryString = Object.keys(params)
+    .map(function (k) { return encodeURIComponent(k) + '=' + encodeURIComponent(params[k]); })
+    .join('&');
+  const url = API_URL + '?' + queryString;
+  let attempt = 0;
+
+  function tryRequest() {
+    attempt++;
+    return fetchWithTimeout(url, {}, REQUEST_TIMEOUT_MS)
+      .then(function (res) {
+        if (!res.ok) throw new Error('Server error: ' + res.status);
+        return res.json();
+      })
+      .catch(function (err) {
+        if (attempt < MAX_RETRIES) {
+          console.log('API GET attempt ' + attempt + ' failed (cold start?). Retrying in 2s...');
+          return sleep(RETRY_DELAY_MS).then(tryRequest);
+        }
+        throw new Error('Network error after ' + MAX_RETRIES + ' attempts. Please refresh the page.');
+      });
+  }
+  return tryRequest();
+}
+
+function apiPost(payload) {
+  // NO RETRY for POST to prevent duplicate attendance submissions
+  return fetchWithTimeout(API_URL, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  }, REQUEST_TIMEOUT_MS).then(function (res) {
+    if (!res.ok) throw new Error('Network error: ' + res.status);
+    return res.json();
+  });
+}
+
+/* ============================================================
+   CACHING & INITIALIZATION
+   ============================================================ */
+const CACHE_KEY = 'attendanceFormData_v1';
+const CACHE_EXPIRY_MS = 30 * 60 * 1000; // 30 mins
+
+function getCachedFormData() {
+  try {
+    const cached = sessionStorage.getItem(CACHE_KEY);
+    if (!cached) return null;
+    const parsed = JSON.parse(cached);
+    if (Date.now() - parsed.timestamp > CACHE_EXPIRY_MS) {
+      sessionStorage.removeItem(CACHE_KEY);
+      return null;
+    }
+    return parsed.data;
+  } catch (e) { return null; }
+}
+
+function setCachedFormData(data) {
+  try {
+    sessionStorage.setItem(CACHE_KEY, JSON.stringify({ data: data, timestamp: Date.now() }));
+  } catch (e) {}
+}
+
+function loadFormData() {
+  const cached = getCachedFormData();
+  if (cached && cached.businessUnits && cached.businessUnits.length > 0) {
+    initializeForm(cached); // Load instantly from cache
+    // Silently refresh in background
+    apiGet({ action: 'formData' })
+      .then(function (freshData) {
+        setCachedFormData(freshData);
+        if (freshData.businessUnits.length !== cached.businessUnits.length) {
+          initializeForm(freshData); // Re-render only if BU count changed
+        }
+      })
+      .catch(function () { /* Silent fail, cache is still valid */ });
+  } else {
+    showMessage('Loading form data...', 'info');
+    apiGet({ action: 'formData' })
+      .then(function (data) {
+        hideMessage();
+        setCachedFormData(data);
+        initializeForm(data);
+      })
+      .catch(showFatalError);
+  }
+}
+
+window.addEventListener('DOMContentLoaded', function () {
+  setDefaultDate();
+
+  loadFormData(); // <--- CHANGED: Uses cache + retry logic instead of raw apiGet
+
+  addListener('module', 'change', onModuleChange);
+  addListener('loadBtn', 'click', handleDateOrBuChange);
+  addListener('attendanceDate', 'change', handleDateOrBuChange);
+  addListener('businessUnit', 'change', handleDateOrBuChange);
+  addListener('markAllBtn', 'click', function () { setAllAttendance('P'); });
+  addListener('markAllSiteBtn', 'click', function () {setAllAttendance('S'); });
+  addListener('markAllWoBtn', 'click', function () { setAllAttendance('WO'); });
+  addListener('markAllPhBtn', 'click', function () { setAllAttendance('PH'); });
+  addListener('markAllNhBtn', 'click', function () { setAllAttendance('NH'); });
+  addListener('clearAllBtn', 'click', function () { setAllAttendance(''); });
+  addListener('submitBtn', 'click', submitForm);
+  addListener('correctionEmployee', 'change', onCorrectionEmployeeChange);
+  addListener('correctedAttendance', 'change', updateCorrectionSubmitButton);
+  addListener('submitCorrectionBtn', 'click', submitCorrectionForm);
+  addListener('modalConfirmBtn', 'click', onModalConfirm);
+  addListener('modalCancelBtn', 'click', onModalCancel);
+
+  const modalOverlay = document.getElementById('modalOverlay');
+  if (modalOverlay) {
+    modalOverlay.addEventListener('click', function (event) {
+      if (event.target === modalOverlay) hideConfirmModal();
+    });
+  }
+});
+
+function addListener(id, eventType, handler) {
+  const element = document.getElementById(id);
+  if (element) element.addEventListener(eventType, handler);
+}
+
+function setDefaultDate() {
+  const today = new Date();
+  document.getElementById('attendanceDate').value = toISODate(today);
+}
+
+function toISODate(dateObj) {
+  const year = dateObj.getFullYear();
+  const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+  const day = String(dateObj.getDate()).padStart(2, '0');
+  return year + '-' + month + '-' + day;
+}
+
+function initializeForm(data) {
+  const buSelect = document.getElementById('businessUnit');
+  buSelect.innerHTML = '<option value="">Select Business Unit</option>';
+  (data.businessUnits || []).forEach(function (bu) {
+    const option = document.createElement('option');
+    option.value = bu.value;
+    option.textContent = bu.label;
+    buSelect.appendChild(option);
+  });
+
+  remarks = data.remarks || [];
+  if (!remarks.length) {
+    showMessage('No active attendance remarks found in Config_Remarks.', 'error');
+  }
+
+  populateCorrectedDropdown();
+  applyModuleMode();
+}
+
+/* ============================================================
+   SUBMISSION MODULE
+   ============================================================ */
+function loadGrid() {
+  const date = document.getElementById('attendanceDate').value;
+  const bu = document.getElementById('businessUnit').value;
+
+  if (!date || !bu) {
+    clearGrid();
+    showMessage('Select Attendance Date and Business Unit to load employees.', 'info');
+    return;
+  }
+
+  showMessage('Loading employees...', 'info');
+  setSubmitting(false);
+
+  apiGet({ action: 'employeeGrid', date: date, bu: bu })
+    .then(renderGrid)
+    .catch(showFatalError);
+}
+
+function renderGrid(data) {
+  hideMessage();
+  const container = document.getElementById('tableContainer');
+  container.innerHTML = '';
+
+  if (!data.success) {
+    showMessage(data.message || 'Unable to load employees.', 'error');
+    updateButtons(0);
+    return;
+  }
+
+  currentReadOnly = !!data.alreadySubmitted;
+
+  if (data.alreadySubmitted) {
+    showMessage(
+      data.message || 'Attendance has already been submitted for this Business Unit and date.',
+      'warning'
+    );
+  }
+
+  const employees = data.employees || [];
+  if (!employees.length) {
+    showMessage(
+      data.alreadySubmitted
+        ? 'No submitted entries found.'
+        : 'No active employees found for this Business Unit and date.',
+      'info'
+    );
+    updateButtons(0);
+    return;
+  }
+
+  const table = document.createElement('table');
+  table.className = 'attendance-table';
+
+  const thead = document.createElement('thead');
+  thead.innerHTML = '<tr><th>Employee ID</th><th>Employee Name</th><th>Attendance</th></tr>';
+  table.appendChild(thead);
+
+  const tbody = document.createElement('tbody');
+  employees.forEach(function (emp) {
+    const tr = document.createElement('tr');
+
+    const tdId = document.createElement('td');
+    tdId.textContent = emp.employeeId;
+
+    const tdName = document.createElement('td');
+    tdName.textContent = emp.employeeName;
+
+    const tdSelect = document.createElement('td');
+    const select = document.createElement('select');
+    select.className = 'attendance-select';
+    select.dataset.employeeId = emp.employeeId;
+    select.dataset.employeeName = emp.employeeName;
+
+    if (currentReadOnly) select.disabled = true;
+
+    const blankOption = document.createElement('option');
+    blankOption.value = '';
+    blankOption.textContent = 'Select remark';
+    select.appendChild(blankOption);
+
+    const existingCodes = [];
+    remarks.forEach(function (remark) {
+      const option = document.createElement('option');
+      option.value = remark.code;
+      option.textContent = remark.code + ' - ' + remark.remark;
+      select.appendChild(option);
+      existingCodes.push(remark.code.toUpperCase());
+    });
+
+    if (emp.selectedCode && existingCodes.indexOf(emp.selectedCode.toUpperCase()) === -1) {
+      const customOption = document.createElement('option');
+      customOption.value = emp.selectedCode;
+      customOption.textContent = emp.selectedRemark
+        ? emp.selectedCode + ' - ' + emp.selectedRemark
+        : emp.selectedCode;
+      select.appendChild(customOption);
+    }
+
+    select.value = emp.selectedCode || '';
+
+    tdSelect.appendChild(select);
+    tr.appendChild(tdId);
+    tr.appendChild(tdName);
+    tr.appendChild(tdSelect);
+    tbody.appendChild(tr);
+  });
+
+  table.appendChild(tbody);
+  container.appendChild(table);
+  updateButtons(employees.length);
+}
+
+function setAllAttendance(code) {
+  document.querySelectorAll('.attendance-select').forEach(function (select) {
+    if (!select.disabled) select.value = code;
+  });
+}
+
+function submitForm() {
+  if (isSubmitting || currentReadOnly) return;
+
+  const date = document.getElementById('attendanceDate').value;
+  const businessUnit = document.getElementById('businessUnit').value;
+
+  if (!date || !businessUnit) {
+    showMessage('Please select Attendance Date and Business Unit.', 'error');
+    return;
+  }
+
+  const entries = [];
+  const missing = [];
+  document.querySelectorAll('.attendance-select').forEach(function (select) {
+    const employeeId = select.dataset.employeeId;
+    const employeeName = select.dataset.employeeName;
+    const code = select.value;
+    entries.push({ employeeId: employeeId, code: code });
+    if (!code) missing.push(employeeName || employeeId);
+  });
+
+  if (!entries.length) {
+    showMessage('No employees loaded.', 'error');
+    return;
+  }
+
+  if (missing.length) {
+    const shown = missing.slice(0, 5).join(', ');
+    const extra = missing.length > 5 ? ' and others' : '';
+    showMessage('Please select attendance for: ' + shown + extra + '.', 'error');
+    return;
+  }
+
+  const payload = {
+    action: 'submitAttendance',
+    date: date,
+    businessUnit: businessUnit,
+    entries: entries
+  };
+
+  setSubmitting(true);
+  apiPost(payload)
+    .then(onSubmitSuccess)
+    .catch(onSubmitFailure);
+}
+
+function resetFormAfterSubmit() {
+  currentReadOnly = false;
+  document.getElementById('businessUnit').value = '';
+  if (RESET_DATE_AFTER_SUBMIT) setDefaultDate();
+  clearGrid();
+}
+
+function onSubmitSuccess(result) {
+  setSubmitting(false);
+  if (result.success) {
+    showMessage(result.message + ' Submission ID: ' + result.submissionId, 'success');
+    resetFormAfterSubmit();
+  } else {
+    showMessage(result.message || 'Submission failed.', 'error');
+  }
+}
+
+function onSubmitFailure(error) {
+  setSubmitting(false);
+  showMessage(error.message || 'Unexpected submission error.', 'error');
+}
+
+/* ============================================================
+   CORRECTION MODULE
+   ============================================================ */
+function loadCorrectionEmployees() {
+  const date = document.getElementById('attendanceDate').value;
+  const bu = document.getElementById('businessUnit').value;
+  clearCorrectionFields();
+
+  if (!date || !bu) {
+    showMessage('Select Attendance Date and Business Unit to load submitted batch.', 'info');
+    return;
+  }
+
+  showMessage('Loading submitted batch...', 'info');
+
+  apiGet({ action: 'correctionEmployees', date: date, bu: bu })
+    .then(renderCorrectionEmployees)
+    .catch(showFatalError);
+}
+
+function renderCorrectionEmployees(data) {
+  const empSelect = document.getElementById('correctionEmployee');
+  empSelect.innerHTML = '<option value="">Select Employee</option>';
+
+  if (!data.success) {
+    showMessage(data.message || 'Unable to load submitted batch.', 'error');
+    updateCorrectionSubmitButton();
+    return;
+  }
+
+  if (!data.found || !data.employees || !data.employees.length) {
+    showMessage(
+      data.message || 'No submitted attendance found for this Business Unit and Date.',
+      'info'
+    );
+    updateCorrectionSubmitButton();
+    return;
+  }
+
+  data.employees.forEach(function (emp) {
+    const option = document.createElement('option');
+    option.value = emp.employeeId;
+    option.textContent = emp.employeeId + ' - ' + emp.employeeName + ' (Current: ' + emp.currentCode + ')';
+    option.dataset.currentCode = emp.currentCode;
+    option.dataset.currentRemark = emp.currentRemark || emp.currentCode;
+    option.dataset.employeeName = emp.employeeName;
+    empSelect.appendChild(option);
+  });
+
+  showMessage('Submitted batch loaded: ' + data.employees.length + ' employee(s).', 'info');
+  updateCorrectionSubmitButton();
+}
+
+function onCorrectionEmployeeChange() {
+  const empSelect = document.getElementById('correctionEmployee');
+  const selected = empSelect.options[empSelect.selectedIndex];
+  const currentCode = selected && selected.dataset.currentCode ? selected.dataset.currentCode : '';
+  const currentRemark = selected && selected.dataset.currentRemark ? selected.dataset.currentRemark : currentCode;
+
+  document.getElementById('currentAttendance').value = currentCode
+    ? currentCode + ' - ' + currentRemark
+    : '';
+
+  const correctedSelect = document.getElementById('correctedAttendance');
+  correctedSelect.value = currentCode;
+  updateCorrectionSubmitButton();
+}
+
+function updateCorrectionSubmitButton() {
+  const btn = document.getElementById('submitCorrectionBtn');
+  if (!btn) return;
+
+  const empSelect = document.getElementById('correctionEmployee');
+  const selected = empSelect.options[empSelect.selectedIndex];
+  const employeeId = empSelect.value;
+  const corrected = document.getElementById('correctedAttendance').value;
+  const current = selected && selected.dataset.currentCode ? selected.dataset.currentCode : '';
+
+  const canSubmit =
+    getCurrentModule() === 'correction' &&
+    employeeId &&
+    corrected &&
+    corrected !== current &&
+    !isSubmitting;
+
+  btn.disabled = !canSubmit;
+}
+
+function submitCorrectionForm() {
+  if (isSubmitting) return;
+
+  const date = document.getElementById('attendanceDate').value;
+  const bu = document.getElementById('businessUnit').value;
+  const empSelect = document.getElementById('correctionEmployee');
+  const employeeId = empSelect.value;
+  const selected = empSelect.options[empSelect.selectedIndex];
+  const employeeName = selected && selected.dataset.employeeName ? selected.dataset.employeeName : '';
+  const currentCode = selected && selected.dataset.currentCode ? selected.dataset.currentCode : '';
+  const currentRemark = selected && selected.dataset.currentRemark ? selected.dataset.currentRemark : currentCode;
+  const correctedCode = document.getElementById('correctedAttendance').value;
+  const correctedRemarkObj = remarks.find(function (r) { return r.code === correctedCode; });
+  const correctedRemark = correctedRemarkObj ? correctedRemarkObj.remark : correctedCode;
+
+  if (!date || !bu) {
+    showMessage('Please select Attendance Date and Business Unit.', 'error');
+    return;
+  }
+  if (!employeeId) {
+    showMessage('Please select an employee to correct.', 'error');
+    return;
+  }
+  if (!correctedCode) {
+    showMessage('Please select corrected attendance remark.', 'error');
+    return;
+  }
+  if (correctedCode === currentCode) {
+    showMessage('No change detected. Please select a different attendance remark.', 'error');
+    return;
+  }
+
+  const payload = {
+    action: 'submitCorrection',
+    date: date,
+    businessUnit: bu,
+    entries: [{ employeeId: employeeId, code: correctedCode }]
+  };
+
+  const confirmText =
+    'Employee: ' + employeeId + ' - ' + employeeName + '\n' +
+    'Date: ' + date + '\n' +
+    'Business Unit: ' + bu + '\n' +
+    'Current Attendance: ' + currentCode + ' - ' + currentRemark + '\n' +
+    'Corrected Attendance: ' + correctedCode + ' - ' + correctedRemark + '\n\n' +
+    'Do you want to continue?';
+
+  showConfirmModal({
+    title: 'Confirm Attendance Correction',
+    message: confirmText,
+    confirmText: 'Confirm Correction',
+    cancelText: 'Cancel',
+    onConfirm: function () { submitCorrectionPayload(payload); }
+  });
+}
+
+function submitCorrectionPayload(payload) {
+  setSubmitting(true);
+  apiPost(payload)
+    .then(onCorrectionSuccess)
+    .catch(onCorrectionFailure);
+}
+
+function onCorrectionSuccess(result) {
+  if (!result.success) {
+    setSubmitting(false);
+    showMessage(result.message || 'Correction failed.', 'error');
+    return;
+  }
+
+  const date = document.getElementById('attendanceDate').value;
+  const bu = document.getElementById('businessUnit').value;
+
+  apiGet({ action: 'correctionEmployees', date: date, bu: bu })
+    .then(function (data) {
+      renderCorrectionEmployees(data);
+      showMessage(result.message + ' Submission ID: ' + result.submissionId, 'success');
+      setSubmitting(false);
+    })
+    .catch(function (err) {
+      setSubmitting(false);
+      showMessage(result.message + ' However, reloading batch failed: ' + err.message, 'warning');
+    });
+}
+
+function onCorrectionFailure(error) {
+  setSubmitting(false);
+  showMessage(error.message || 'Unexpected correction error.', 'error');
+}
+
+/* ============================================================
+   MODULE / UI HELPERS
+   ============================================================ */
+function getCurrentModule() {
+  return document.getElementById('module').value;
+}
+
+function onModuleChange() {
+  applyModuleMode();
+  handleDateOrBuChange();
+}
+
+function applyModuleMode() {
+  const mode = getCurrentModule();
+  document.getElementById('submissionSection').style.display = mode === 'submission' ? 'block' : 'none';
+  document.getElementById('correctionSection').style.display = mode === 'correction' ? 'block' : 'none';
+  hideMessage();
+
+  if (mode === 'correction') {
+    populateCorrectedDropdown();
+    clearCorrectionFields();
+    showMessage('Select Attendance Date and Business Unit to load submitted batch.', 'info');
+  } else {
+    clearCorrectionFields();
+  }
+}
+
+function handleDateOrBuChange() {
+  if (getCurrentModule() === 'submission') {
+    loadGrid();
+  } else {
+    loadCorrectionEmployees();
+  }
+}
+
+function populateCorrectedDropdown() {
+  const select = document.getElementById('correctedAttendance');
+  if (!select) return;
+
+  const currentValue = select.value;
+  select.innerHTML = '<option value="">Select corrected remark</option>';
+  remarks.forEach(function (remark) {
+    const option = document.createElement('option');
+    option.value = remark.code;
+    option.textContent = remark.code + ' - ' + remark.remark;
+    select.appendChild(option);
+  });
+
+  if (currentValue) select.value = currentValue;
+}
+
+function clearCorrectionFields() {
+  const empSelect = document.getElementById('correctionEmployee');
+  empSelect.innerHTML = '<option value="">Select Employee</option>';
+  document.getElementById('currentAttendance').value = '';
+  populateCorrectedDropdown();
+  document.getElementById('correctedAttendance').value = '';
+  updateCorrectionSubmitButton();
+}
+
+function clearGrid() {
+  document.getElementById('tableContainer').innerHTML = '';
+  document.getElementById('summary').textContent = '';
+  updateButtons(0);
+}
+
+function updateButtons(employeeCount) {
+  const summary = document.getElementById('summary');
+  if (currentReadOnly) {
+    summary.textContent = employeeCount ? 'Submitted entries: ' + employeeCount : '';
+  } else {
+    summary.textContent = employeeCount ? 'Employees to submit: ' + employeeCount : '';
+  }
+
+  const canEdit = !currentReadOnly && employeeCount > 0 && !isSubmitting;
+  document.getElementById('markAllBtn').disabled = !canEdit;
+  document.getElementById('markAllSiteBtn').disabled = !canEdit;
+  document.getElementById('markAllWoBtn').disabled = !canEdit;
+  document.getElementById('markAllPhBtn').disabled = !canEdit;
+  document.getElementById('markAllNhBtn').disabled = !canEdit;
+  document.getElementById('clearAllBtn').disabled = !canEdit;
+  document.getElementById('submitBtn').disabled = !canEdit;
+}
+
+function setSubmitting(state) {
+  isSubmitting = state;
+  document.getElementById('loading').style.display = state ? 'flex' : 'none';
+  document.getElementById('submitBtn').disabled = state || currentReadOnly;
+
+  const correctionBtn = document.getElementById('submitCorrectionBtn');
+  if (correctionBtn && state) correctionBtn.disabled = true;
+
+  if (!state) {
+    updateButtons(document.querySelectorAll('.attendance-select').length);
+    updateCorrectionSubmitButton();
+  }
+}
+
+/* ============================================================
+   MESSAGES
+   ============================================================ */
+function showMessage(text, type) {
+  const el = document.getElementById('message');
+  el.textContent = text;
+  el.className = 'message visible ' + (type || 'info');
+}
+
+function hideMessage() {
+  const el = document.getElementById('message');
+  el.textContent = '';
+  el.className = 'message';
+}
+
+function showFatalError(error) {
+  const msg = (error.message || 'Unexpected error occurred.') + ' Please refresh the page (F5) to try again.';
+  showMessage(msg, 'error');
+  updateButtons(0);
+}
+
+/* ============================================================
+   MODAL
+   ============================================================ */
+function showConfirmModal(options) {
+  const overlay = document.getElementById('modalOverlay');
+  const title = document.getElementById('modalTitle');
+  const message = document.getElementById('modalMessage');
+  const confirmBtn = document.getElementById('modalConfirmBtn');
+  const cancelBtn = document.getElementById('modalCancelBtn');
+
+  if (!overlay || !title || !message || !confirmBtn || !cancelBtn) return;
+
+  title.textContent = options.title || 'Please Confirm';
+  message.textContent = options.message || '';
+  confirmBtn.textContent = options.confirmText || 'Confirm';
+  cancelBtn.textContent = options.cancelText || 'Cancel';
+  modalConfirmCallback = options.onConfirm || null;
+  overlay.classList.add('visible');
+}
+
+function hideConfirmModal() {
+  const overlay = document.getElementById('modalOverlay');
+  if (overlay) overlay.classList.remove('visible');
+  modalConfirmCallback = null;
+}
+
+function onModalConfirm() {
+  const callback = modalConfirmCallback;
+  hideConfirmModal();
+  if (typeof callback === 'function') callback();
+}
+
+function onModalCancel() {
+  hideConfirmModal();
+}
+</script>
+</body>
+</html>
