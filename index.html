@@ -84,6 +84,58 @@
     <div class="footer">Attendance Submission Engine</div>
   </div>
 
+  <!-- ============================================================
+     ATTENDANCE GUIDELINES PANEL
+     Open by default to catch attention. Collapsible.
+     ============================================================ -->
+<div class="form-card guidelines-card">
+  <details class="guidelines" open>
+    <summary class="guidelines-toggle">
+      📋 Attendance Guidelines — Read Before Submitting
+    </summary>
+    <div class="guidelines-body">
+
+      <div class="guideline-section guidelines-critical">
+        <div class="guideline-heading">⚠️ Golden Rules</div>
+        <ul>
+          <li><strong>SUNDAY work</strong> → mark <span class="code-badge code-ws">WS</span> for <strong>ANY</strong> employee (Office, Site, Factory, Shop)</li>
+          <li>Use <span class="code-badge code-s">S</span> <strong>ONLY</strong> for <strong>SITE</strong> employees on weekdays (Mon–Sat)</li>
+          <li><strong>NEVER</strong> mark <span class="code-badge code-s">S</span> for Office / Factory / Shop employees</li>
+        </ul>
+      </div>
+
+      <div class="guideline-section">
+        <div class="guideline-heading">📅 Before Submitting</div>
+        <ul>
+          <li>Select the correct <strong>Date</strong> and <strong>Business Unit</strong></li>
+          <li>Every employee must have a code — <strong>no blanks allowed</strong></li>
+          <li>One submission per BU per date. To fix errors, use the <strong>Correction</strong> module</li>
+        </ul>
+      </div>
+
+      <div class="guideline-section">
+        <div class="guideline-heading">🔖 Quick Code Reference</div>
+        <table class="code-reference">
+          <tr><td><span class="code-badge">P</span></td><td>Present — normal working day</td></tr>
+          <tr><td><span class="code-badge">A</span></td><td>Absent — did not attend</td></tr>
+          <tr><td><span class="code-badge code-s">S</span></td><td>On-Site Duty — Site employees only (Mon–Sat)</td></tr>
+          <tr><td><span class="code-badge code-ws">WS</span></td><td>Working Sunday — ANY employee on Sunday</td></tr>
+          <tr><td><span class="code-badge">T</span></td><td>On-Tour — travelling for work</td></tr>
+          <tr><td><span class="code-badge">OS</span></td><td>Out Station — working out of station</td></tr>
+          <tr><td><span class="code-badge">WO</span></td><td>Weekly Off — regular off day</td></tr>
+          <tr><td><span class="code-badge">PH</span></td><td>Public Holiday</td></tr>
+          <tr><td><span class="code-badge">NH</span></td><td>National Holiday</td></tr>
+          <tr><td><span class="code-badge">SH</span></td><td>Special Holiday</td></tr>
+          <tr><td><span class="code-badge">CL</span></td><td>Casual Leave</td></tr>
+          <tr><td><span class="code-badge">ML</span></td><td>Medical Leave</td></tr>
+          <tr><td><span class="code-badge">HD</span></td><td>Half Day</td></tr>
+        </table>
+      </div>
+
+    </div>
+  </details>
+</div>
+
   <div id="modalOverlay" class="modal-overlay">
     <div class="modal-box">
       <h3 id="modalTitle">Please Confirm</h3>
