@@ -318,3 +318,127 @@ body {
     width: 100%;
   }
 }
+
+/* ============================================================
+   ATTENDANCE GUIDELINES PANEL
+   ============================================================ */
+.guidelines-card {
+  padding: 0;
+  background: #f8fafc;
+}
+
+.guidelines-toggle {
+  padding: 16px 30px;
+  font-weight: 700;
+  font-size: 15px;
+  color: #1e293b;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.guidelines-toggle::-webkit-details-marker {
+  display: none;
+}
+
+.guidelines-toggle::before {
+  content: '▼';
+  font-size: 11px;
+  color: #64748b;
+  transition: transform 0.2s ease;
+}
+
+.guidelines:not([open]) .guidelines-toggle::before {
+  transform: rotate(-90deg);
+}
+
+.guidelines-body {
+  padding: 4px 30px 20px 30px;
+}
+
+.guideline-section {
+  margin-bottom: 16px;
+}
+
+.guideline-heading {
+  font-weight: 700;
+  font-size: 13px;
+  color: #475569;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.guideline-section ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.guideline-section li {
+  font-size: 13.5px;
+  color: #334155;
+  line-height: 1.7;
+}
+
+/* Critical section — subtle highlight to draw the eye */
+.guidelines-critical {
+  background: #fff7ed;
+  border-left: 4px solid #f97316;
+  border-radius: 6px;
+  padding: 12px 14px;
+}
+
+.guidelines-critical .guideline-heading {
+  color: #c2410c;
+}
+
+/* Code badges */
+.code-badge {
+  display: inline-block;
+  min-width: 26px;
+  text-align: center;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: #e2e8f0;
+  color: #334155;
+  font-weight: 700;
+  font-size: 12px;
+  font-family: 'Segoe UI', monospace;
+}
+
+.code-badge.code-ws {
+  background: #fef3c7;
+  color: #b45309;
+  border: 1px solid #fbbf24;
+}
+
+.code-badge.code-s {
+  background: #dbeafe;
+  color: #1d4ed8;
+  border: 1px solid #60a5fa;
+}
+
+/* Quick code reference table */
+.code-reference {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.code-reference td {
+  padding: 5px 8px;
+  border-bottom: 1px solid #eef2f7;
+  vertical-align: middle;
+  color: #334155;
+}
+
+.code-reference td:first-child {
+  width: 50px;
+}
+
+.code-reference tr:last-child td {
+  border-bottom: none;
+}
